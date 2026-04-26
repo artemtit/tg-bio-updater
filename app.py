@@ -4,7 +4,6 @@ import logging
 import json
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
-
 from telethon import TelegramClient, functions
 
 # ========= CONFIG =========
@@ -18,8 +17,7 @@ QUOTES_FILE = "quotes.txt"
 STATE_FILE = "state.json"
 LAST_FILE = "last.txt"
 
-MAX_LEN = 70
-
+MAX_LEN = 65
 TZ = ZoneInfo("Europe/Moscow")
 
 # ========= LOGGING =========
@@ -75,7 +73,8 @@ def get_next_quote(quotes):
 
 
 def trim_quote(q):
-    return q[:MAX_LEN]
+    q = q.strip()
+    return q[:MAX_LEN] if len(q) > MAX_LEN else q
 
 
 def should_update(new_quote):
@@ -103,30 +102,45 @@ def seconds_until_target(hour, minute):
     return (target - now).total_seconds()
 
 
-# ========= MAIN LOOP =========
+# ========= MAIN =========
+
+async def update_once(client, quotes):
+    quote = trim_quote(get_next_quote(quotes))
+
+    if not quote.strip():
+        logging.warning("Empty quote, skipping")
+        return
+
+    if not should_update(quote):
+        logging.info("Same quote, skipping")
+        return
+
+    await client(functions.account.UpdateProfileRequest(
+        about=quote
+    ))
+
+    save_last(quote)
+    logging.info(f"Bio updated: {quote}")
+
 
 async def run(client):
     quotes = load_quotes()
 
+    # 🔥 ОБНОВЛЕНИЕ СРАЗУ ПРИ ЗАПУСКЕ
+    try:
+        await update_once(client, quotes)
+    except Exception as e:
+        logging.error(f"Initial update error: {e}")
+
+    # основной цикл
     while True:
         try:
             wait_time = seconds_until_target(UPDATE_HOUR, UPDATE_MINUTE)
             logging.info(f"Sleeping {int(wait_time)} seconds until next update (MSK)")
             await asyncio.sleep(wait_time)
 
-            quote = get_next_quote(quotes)
-            quote = trim_quote(quote)
-
-            if not should_update(quote):
-                logging.info("Quote is same as last, skipping")
-                continue
-
-            await client(functions.account.UpdateProfileRequest(
-                about=quote
-            ))
-
-            save_last(quote)
-            logging.info(f"Bio updated: {quote}")
+            quotes = load_quotes()  # перечитываем файл каждый раз
+            await update_once(client, quotes)
 
         except Exception as e:
             logging.error(f"Error: {e}")
